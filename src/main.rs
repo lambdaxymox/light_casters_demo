@@ -1,5 +1,5 @@
 extern crate glfw;
-extern crate gdmath;
+extern crate cglinalg;
 extern crate image;
 extern crate log;
 extern crate file_logger;
@@ -27,16 +27,18 @@ use camera::{
 };
 use light::PointLight;
 use material::Material;
-use gdmath::{
+use cglinalg::{
     Degrees,
     Quaternion,
     Magnitude,
     Matrix4,
     Radians,
-    Storage,
+    Array,
     Vector3,
-    One,
-    Zero,
+    Vector4,
+    Identity,
+    AdditiveIdentity,
+    Unit,
 };
 use glfw::{
     Action, 
@@ -126,10 +128,10 @@ fn create_camera(width: u32, height: u32) -> Camera<f32> {
 
     let speed = 5.0;
     let yaw_speed = 50.0;
-    let position = gdmath::vec3((0.0, 0.0, 3.0));
-    let forward = gdmath::vec4((0.0, 0.0, 1.0, 0.0));
-    let right = gdmath::vec4((1.0, 0.0, 0.0, 0.0));
-    let up  = gdmath::vec4((0.0, 1.0, 0.0, 0.0));
+    let position = Vector3::new(0.0, 0.0, 3.0);
+    let forward = Vector4::new(0.0, 0.0, 1.0, 0.0);
+    let right = Vector4::new(1.0, 0.0, 0.0, 0.0);
+    let up  = Vector4::new(0.0, 1.0, 0.0, 0.0);
     let axis = Quaternion::new(0.0, 0.0, 0.0, -1.0);
     let kinematics = CameraKinematics::new(speed, yaw_speed, position, forward, right, up, axis);
 
@@ -248,17 +250,18 @@ impl LightKinematics {
             self.radial_unit_velocity = -1.0;
         }
     
+        let orbital_axis = Unit::from_value(self.orbital_axis);
         let q = Quaternion::from_axis_angle(
-            self.orbital_axis, Radians(self.orbital_speed * elapsed_seconds)
+            &orbital_axis, Radians(self.orbital_speed * elapsed_seconds)
         );
         let rot_mat = Matrix4::from(q);
-        let new_position = rot_mat * gdmath::vec4((distance_from_scene_center * radial_vector, 1.0));
+        let new_position = rot_mat * (distance_from_scene_center * radial_vector).expand(1.0);
 
-        self.position = gdmath::vec3(new_position);
+        self.position = new_position.contract();
     }
 
     fn model_mat(&self) -> Matrix4<f32> {
-        Matrix4::from_translation(self.position)
+        Matrix4::from_affine_translation(self.position)
     }
 }
 
@@ -793,7 +796,7 @@ fn main() {
     let mut context = init_gl(SCREEN_WIDTH, SCREEN_HEIGHT);
 
     //  Load the model.
-    let mesh_model_mat = Matrix4::one();
+    let mesh_model_mat = Matrix4::identity();
     let mesh_shader_source = create_mesh_shader_source();
     let mesh_shader = send_to_gpu_shaders(&mut context, mesh_shader_source);
     let (
@@ -854,7 +857,7 @@ fn main() {
             gl::DrawArrays(gl::TRIANGLES, 0, mesh.len() as i32);
         }
         // Render the lights.
-        let light_model_mat = lights[0].kinematics.model_mat() * Matrix4::from_scale(0.2);
+        let light_model_mat = lights[0].kinematics.model_mat() * Matrix4::from_affine_scale(0.2);
         send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
@@ -862,7 +865,7 @@ fn main() {
             gl::DrawArrays(gl::TRIANGLES, 0, light_mesh.len() as i32);
         }
     
-        let light_model_mat = lights[1].kinematics.model_mat() * Matrix4::from_scale(0.2);
+        let light_model_mat = lights[1].kinematics.model_mat() * Matrix4::from_affine_scale(0.2);
         send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
@@ -870,7 +873,7 @@ fn main() {
             gl::DrawArrays(gl::TRIANGLES, 0, light_mesh.len() as i32);
         }
         
-        let light_model_mat = lights[2].kinematics.model_mat() * Matrix4::from_scale(0.2);
+        let light_model_mat = lights[2].kinematics.model_mat() * Matrix4::from_affine_scale(0.2);
         send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);

@@ -1,6 +1,6 @@
 [package]
 name = "light_casters_demo"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["LambdaXymox <lambda.xymox@gmail.com>"]
 edition = "2018"
 
@@ -9,7 +9,7 @@ glfw = "0.39.1"
 image = "0.23.9"
 log = "0.4.11"
 file_logger = { git = "https://github.com/lambdaxymox/file-logger" }
-gdmath = { git = "https://github.com/lambdaxymox/gdmath" }
+cglinalg = { git = "https://github.com/lambdaxymox/cglinalg" }
 mini_obj = { git = "https://github.com/lambdaxymox/mini_obj" }
 
 [build-dependencies]
