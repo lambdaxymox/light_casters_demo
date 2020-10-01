@@ -37,7 +37,7 @@ use cglinalg::{
     Vector3,
     Vector4,
     Identity,
-    AdditiveIdentity,
+    Zero,
     Unit,
 };
 use glfw::{
@@ -261,7 +261,7 @@ impl LightKinematics {
     }
 
     fn model_mat(&self) -> Matrix4<f32> {
-        Matrix4::from_affine_translation(self.position)
+        Matrix4::from_affine_translation(&self.position)
     }
 }
 
