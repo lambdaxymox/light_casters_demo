@@ -62,11 +62,19 @@ checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
 name = "cglinalg"
-version = "0.10.3"
-source = "git+https://github.com/lambdaxymox/cglinalg#68b1edf4a3eaccd5731719b154cca8e6d7815a63"
+version = "0.10.10"
+source = "git+https://github.com/lambdaxymox/cglinalg#a29dd55b00b1a2bc24ef2f26d78ee52e07d517c3"
 dependencies = [
  "approx",
  "num-traits",
+]
+
+[[package]]
+name = "cgperspective"
+version = "0.1.9"
+source = "git+https://github.com/lambdaxymox/cgperspective#ae578f8273c025683f30aac976f51270fe516011"
+dependencies = [
+ "cglinalg",
 ]
 
 [[package]]
@@ -311,6 +319,7 @@ name = "light_casters_demo"
 version = "0.1.4"
 dependencies = [
  "cglinalg",
+ "cgperspective",
  "file_logger",
  "gl_generator",
  "glfw",

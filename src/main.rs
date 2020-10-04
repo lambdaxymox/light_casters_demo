@@ -1,5 +1,6 @@
 extern crate glfw;
 extern crate cglinalg;
+extern crate cgperspective;
 extern crate image;
 extern crate log;
 extern crate file_logger;
@@ -18,11 +19,14 @@ mod material;
 use backend::{
     OpenGLContext,
 };
-use camera::{
+use cgperspective::{
     SimpleCameraMovement,
     CameraMovement,
-    CameraSpecification,
-    CameraKinematics,
+    CameraAttitudeSpec,
+    PerspectiveFovSpec,
+    PerspectiveFovProjection,
+    FreeKinematics,
+    FreeKinematicsSpec,
     Camera
 };
 use light::PointLight;
@@ -35,7 +39,6 @@ use cglinalg::{
     Radians,
     Array,
     Vector3,
-    Vector4,
     Identity,
     Zero,
     Unit,
@@ -50,10 +53,14 @@ use gl::types::{
     GLint,
     GLuint, 
     GLvoid, 
-    GLsizeiptr
+    GLsizeiptr,
 };
-use log::{info};
-use mini_obj::ObjMesh;
+use log::{
+    info
+};
+use mini_obj::{
+    ObjMesh
+};
 use std::io;
 use std::mem;
 use std::ptr;
@@ -119,23 +126,37 @@ fn create_box_mesh() -> ObjMesh {
     ObjMesh::new(points, tex_coords, normals)
 }
 
-fn create_camera(width: u32, height: u32) -> Camera<f32> {
+fn create_camera(width: u32, height: u32) -> Camera<f32, PerspectiveFovProjection<f32>, FreeKinematics<f32>> {
     let near = 0.1;
     let far = 100.0;
     let fovy = Degrees(67.0);
     let aspect = width as f32 / height as f32;
-    let spec = CameraSpecification::new(near, far, fovy, aspect);
-
-    let speed = 5.0;
-    let yaw_speed = 50.0;
+    let model_spec = PerspectiveFovSpec::new(
+        fovy, 
+        aspect, 
+        near, 
+        far
+    );
     let position = Vector3::new(0.0, 0.0, 3.0);
-    let forward = Vector4::new(0.0, 0.0, 1.0, 0.0);
-    let right = Vector4::new(1.0, 0.0, 0.0, 0.0);
-    let up  = Vector4::new(0.0, 1.0, 0.0, 0.0);
-    let axis = Quaternion::new(0.0, 0.0, 0.0, -1.0);
-    let kinematics = CameraKinematics::new(speed, yaw_speed, position, forward, right, up, axis);
+    let forward = Vector3::new(0.0, 0.0, 1.0);
+    let right = Vector3::new(1.0, 0.0, 0.0);
+    let up  = Vector3::new(0.0, 1.0, 0.0);
+    let axis = Vector3::new(0.0, 0.0, -1.0);
+    let attitude_spec = CameraAttitudeSpec::new(
+        position,
+        forward,
+        right,
+        up,
+        axis,
+    );
+    let movement_speed = 5.0;
+    let rotation_speed = 50.0;
+    let kinematics_spec = FreeKinematicsSpec::new(
+        movement_speed, 
+        rotation_speed
+    );
 
-    Camera::new(spec, kinematics)
+    Camera::new(&model_spec, &attitude_spec, &kinematics_spec)
 }
 
 struct Light {
@@ -235,13 +256,20 @@ impl LightKinematics {
     }
 
     fn update(&mut self, elapsed_seconds: f32) {
-        self.radial_unit_velocity = if self.radial_unit_velocity < 0.0 { -1.0 } else { 1.0 };
-        let radius_center_of_oscillation = (self.center_of_oscillation - self.scene_center).magnitude();
+        self.radial_unit_velocity = if self.radial_unit_velocity < 0.0 {
+            -1.0 
+        } else { 
+            1.0 
+        };
+        let radius_center_of_oscillation = 
+            (self.center_of_oscillation - self.scene_center).magnitude();
         let radial_vector: Vector3<f32> = (self.position - self.scene_center).normalize();
         let radius_perihelion = radius_center_of_oscillation - self.radius_of_oscillation;
         let radius_aphelion = radius_center_of_oscillation + self.radius_of_oscillation;
         let mut distance_from_scene_center = (self.position - self.scene_center).magnitude();
-        distance_from_scene_center = distance_from_scene_center + (self.radial_speed * elapsed_seconds) * self.radial_unit_velocity;
+        distance_from_scene_center = 
+            distance_from_scene_center + 
+            (self.radial_speed * elapsed_seconds) * self.radial_unit_velocity;
         if distance_from_scene_center < radius_perihelion {
             distance_from_scene_center = radius_perihelion;
             self.radial_unit_velocity = 1.0;
@@ -327,7 +355,9 @@ fn send_to_gpu_uniforms_mesh(shader: GLuint, model_mat: &Matrix4<f32>) {
     }
 }
 
-fn send_to_gpu_uniforms_camera(shader: GLuint, camera: &Camera<f32>) {
+fn send_to_gpu_uniforms_camera(
+    shader: GLuint, camera: &Camera<f32, PerspectiveFovProjection<f32>, FreeKinematics<f32>>) {
+    
     let camera_proj_mat_loc = unsafe {
         gl::GetUniformLocation(shader, backend::gl_str("camera.proj_mat").as_ptr())
     };
@@ -339,17 +369,29 @@ fn send_to_gpu_uniforms_camera(shader: GLuint, camera: &Camera<f32>) {
 
     unsafe {
         gl::UseProgram(shader);
-        gl::UniformMatrix4fv(camera_proj_mat_loc, 1, gl::FALSE, camera.proj_mat.as_ptr());
-        gl::UniformMatrix4fv(camera_view_mat_loc, 1, gl::FALSE, camera.view_mat.as_ptr());
+        gl::UniformMatrix4fv(
+            camera_proj_mat_loc, 
+            1, 
+            gl::FALSE, 
+            camera.projection().as_ptr()
+        );
+        gl::UniformMatrix4fv(
+            camera_view_mat_loc, 
+            1, 
+            gl::FALSE, 
+            camera.view_matrix().as_ptr()
+        );
     }
 }
 
 /// Send the uniforms for the lighting data to the GPU for the mesh.
-/// Note that in order to render multiple lights in the shader, we define an array
-/// of structs. In OpenGL, each elementary member of a struct is considered to be a uniform variable,
-/// and each struct is a struct of uniforms. Consequently, if every element of an array of struct uniforms
-/// is not used in the shader, OpenGL will optimize those uniform locations out at runtime. This
-/// will cause OpenGL to return a `GL_INVALID_VALUE` on a call to `glGetUniformLocation`.
+/// Note that in order to render multiple lights in the shader, we define an 
+/// array of structs. In OpenGL, each elementary member of a struct is 
+/// considered to be a uniform variable, and each struct is a struct of uniforms. 
+/// Consequently, if every element of an array of struct uniforms is not used in 
+/// the shader, OpenGL will optimize those uniform locations out at runtime. This
+/// will cause OpenGL to return a `GL_INVALID_VALUE` on a call to 
+/// `glGetUniformLocation`.
 fn send_to_gpu_uniforms_light(shader: GLuint, lights: &[Light; 3]) {
     let light_position_world_loc = unsafe {
         gl::GetUniformLocation(shader, backend::gl_str("lights[0].position_world").as_ptr())
@@ -830,7 +872,7 @@ fn main() {
         context.glfw.poll_events();
         let (width, height) = context.window.get_framebuffer_size();
         if (width != context.width as i32) && (height != context.height as i32) {
-            camera.update_viewport(width as u32, height as u32);
+            camera.update_viewport(width as usize, height as usize);
             framebuffer_size_callback(&mut context, width as u32, height as u32);
         }
 
