@@ -12,7 +12,6 @@ mod gl {
 }
 
 mod backend;
-mod camera;
 mod light;
 mod material;
 
