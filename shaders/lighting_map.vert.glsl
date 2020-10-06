@@ -3,10 +3,10 @@
 struct Camera {
     // The transformation converting from camera space to 
     // the canonical view volume.
-    mat4 proj_mat;
+    mat4 projection;
     // The coordinate transformation for converting from
     // world space to camera space.
-    mat4 view_mat;
+    mat4 view;
 };
 
 struct FragData {
@@ -18,22 +18,22 @@ struct FragData {
     vec3 normal_eye;
 };
 
-layout (location = 0) in vec3 v_pos;
-layout (location = 1) in vec2 v_tex;
-layout (location = 2) in vec3 v_norm;
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec2 aTexCoords;
+layout (location = 2) in vec3 aNormal;
 
 // The coordinate transformation placing an object from model 
 // space to world space.
-uniform mat4 model_mat;
+uniform mat4 model;
 uniform Camera camera;
 
 out FragData vertex_data;
 
 
 void main() {
-    vertex_data.position_eye = vec3(camera.view_mat * model_mat * vec4(v_pos, 1.0));
-    vertex_data.tex_coords = v_tex;
-    vertex_data.normal_eye = vec3(camera.view_mat * model_mat * vec4(v_norm, 0.0));
+    vertex_data.position_eye = vec3(camera.view * model * vec4(aPos, 1.0));
+    vertex_data.tex_coords = aTexCoords;
+    vertex_data.normal_eye = vec3(camera.view * model * vec4(aNormal, 0.0));
 
-    gl_Position = camera.proj_mat * vec4(vertex_data.position_eye, 1.0);
+    gl_Position = camera.projection * vec4(vertex_data.position_eye, 1.0);
 }

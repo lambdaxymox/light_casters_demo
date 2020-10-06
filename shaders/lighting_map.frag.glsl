@@ -4,10 +4,10 @@ const int NUM_LIGHTS = 3;
 struct Camera {
     // The transformation converting from camera space to 
     // the canonical view volume.
-    mat4 proj_mat;
+    mat4 projection;
     // The coordinate transformation for converting from
     // world space to camera space.
-    mat4 view_mat;
+    mat4 view;
 };
 
 struct FragData {
@@ -43,7 +43,7 @@ struct Light {
 
 in FragData vertex_data;
 
-uniform mat4 model_mat;
+uniform mat4 model;
 uniform Camera camera;
 uniform Material material;
 uniform Light lights[NUM_LIGHTS];
@@ -59,7 +59,7 @@ void main() {
 
         // Calculate the diffuse part of the lighting model.
         vec3 norm_eye = normalize(vertex_data.normal_eye);
-        vec3 light_position_eye = vec3(camera.view_mat * vec4(lights[i].position_world, 1.0));
+        vec3 light_position_eye = vec3(camera.view * vec4(lights[i].position_world, 1.0));
         vec3 light_dir_eye = normalize(light_position_eye - vertex_data.position_eye);
         float diff = max(dot(norm_eye, light_dir_eye), 0.0);
         vec3 frag_diffuse = lights[i].diffuse * diff * vec3(texture(material.diffuse, vertex_data.tex_coords));

@@ -15,22 +15,7 @@ mod backend;
 mod light;
 mod material;
 
-use backend::{
-    OpenGLContext,
-};
-use cgperspective::{
-    SimpleCameraMovement,
-    CameraMovement,
-    CameraAttitudeSpec,
-    PerspectiveFovSpec,
-    PerspectiveFovProjection,
-    FreeKinematics,
-    FreeKinematicsSpec,
-    Camera
-};
-use light::{
-    SpotLight,
-};
+
 use material::Material;
 use cglinalg::{
     Angle,
@@ -44,6 +29,17 @@ use cglinalg::{
     Identity,
     Zero,
     Unit,
+    ScalarFloat,
+};
+use cgperspective::{
+    SimpleCameraMovement,
+    CameraMovement,
+    CameraAttitudeSpec,
+    PerspectiveFovSpec,
+    PerspectiveFovProjection,
+    FreeKinematics,
+    FreeKinematicsSpec,
+    Camera
 };
 use glfw::{
     Action, 
@@ -63,6 +59,27 @@ use log::{
 use mini_obj::{
     ObjMesh
 };
+
+use crate::backend::{
+    OpenGLContext,
+};
+use crate::light::{
+    Light,
+    LightKinematics,
+    LightAttitudeSpec,
+    PointLightSpec,
+    PointLight,
+    SpotLightSpec,
+    SpotLight,
+    FixedPositionKinematicsSpec,
+    FixedPositionKinematics,
+    DeltaAttitude,
+};
+
+use std::marker::{
+    PhantomData,
+};
+
 use std::io;
 use std::mem;
 use std::ptr;
@@ -176,16 +193,282 @@ fn create_camera(width: u32, height: u32) -> Camera<f32, PerspectiveFovProjectio
     Camera::new(&model_spec, &attitude_spec, &kinematics_spec)
 }
 
-struct Light {
-    light: SpotLight<f32>,
-    kinematics: LightKinematics,
+type PerspectiveFovCamera<S> = Camera<S, PerspectiveFovProjection<S>, FreeKinematics<S>>;
+type CubeLight<S> = Light<S, PointLight<S>, OrbitalKinematics<S>>;
+type FlashLight<S> = Light<S, SpotLight<S>, PositionKinematics<S>>;
+
+
+struct OrbitalKinematicsSpec<S> {
+    scene_center: Vector3<S>,
+    radial_speed: S,
+    center_of_oscillation: Vector3<S>,
+    radius_of_oscillation: S,
+    orbital_axis: Vector3<S>,
+    orbital_speed: S,
 }
 
-fn create_lights(
-    scene_center_world: &Vector3<f32>, 
-    camera: &Camera<f32, PerspectiveFovProjection<f32>, FreeKinematics<f32>>) -> [Light; 1]
-{    
+impl<S> OrbitalKinematicsSpec<S> {
+    pub fn new(
+        scene_center: Vector3<S>,
+        radial_speed: S,
+        center_of_oscillation: Vector3<S>,
+        radius_of_oscillation: S,
+        orbital_axis: Vector3<S>,
+        orbital_speed: S) -> Self
+    {
+        OrbitalKinematicsSpec {
+            scene_center: scene_center,
+            radial_speed: radial_speed,
+            center_of_oscillation: center_of_oscillation,
+            radius_of_oscillation: radius_of_oscillation,
+            orbital_axis: orbital_axis,
+            orbital_speed: orbital_speed,
+        }
+    }
+}
+
+struct OrbitalKinematics<S> {
+    scene_center: Vector3<S>,
+    radial_speed: S,
+    center_of_oscillation: Vector3<S>,
+    radius_of_oscillation: S,
+    position: Vector3<S>,
+    radial_unit_velocity: S,
+    orbital_axis: Vector3<S>,
+    orbital_speed: S,
+}
+
+impl<S> LightKinematics<S> for OrbitalKinematics<S> where S: ScalarFloat {
+    type Spec = OrbitalKinematicsSpec<S>;
+    type Args = ();
+    
+    fn from_spec(spec: &Self::Spec) -> Self {
+        let radial_unit_velocity = S::one();
+        let position = spec.center_of_oscillation;
+
+        OrbitalKinematics {
+            scene_center: spec.scene_center,
+            radial_speed: spec.radial_speed,
+            center_of_oscillation: spec.center_of_oscillation,
+            radius_of_oscillation: spec.radius_of_oscillation,
+            position: position,
+            radial_unit_velocity: radial_unit_velocity,
+            orbital_axis: spec.orbital_axis.normalize(),
+            orbital_speed: spec.orbital_speed,
+        }
+    }
+
+    fn update(&mut self, args: &Self::Args, elapsed: S) -> DeltaAttitude<S> {
+        self.radial_unit_velocity = if self.radial_unit_velocity < S::zero() {
+            -S::one() 
+        } else { 
+            S::one()
+        };
+        let radius_center_of_oscillation = 
+            (self.center_of_oscillation - self.scene_center).magnitude();
+        let radial_vector: Vector3<S> = (self.position - self.scene_center).normalize();
+        let radius_perihelion = radius_center_of_oscillation - self.radius_of_oscillation;
+        let radius_aphelion = radius_center_of_oscillation + self.radius_of_oscillation;
+        let mut distance_from_scene_center = (self.position - self.scene_center).magnitude();
+        distance_from_scene_center = 
+            distance_from_scene_center + 
+            (self.radial_speed * elapsed) * self.radial_unit_velocity;
+        if distance_from_scene_center < radius_perihelion {
+            distance_from_scene_center = radius_perihelion;
+            self.radial_unit_velocity = S::one();
+        } else if distance_from_scene_center > radius_aphelion {
+            distance_from_scene_center = radius_aphelion;
+            self.radial_unit_velocity = -S::one();
+        }
+    
+        let orbital_axis = Unit::from_value(self.orbital_axis);
+        let q = Quaternion::from_axis_angle(
+            &orbital_axis, Radians(self.orbital_speed * elapsed)
+        );
+        let rot_mat = Matrix4::from(q);
+        let new_position = rot_mat * (radial_vector * distance_from_scene_center).expand(S::one());
+
+        self.position = new_position.contract();
+
+        DeltaAttitude::new(
+            self.position.x, 
+            self.position.y, 
+            self.position.z, 
+            S::zero(), 
+            S::zero(), 
+            S::zero()
+        )
+    }
+}
+
+fn create_cube_lights(scene_center_world: &Vector3<f32>) -> [CubeLight<f32>; 3] {
+    let ambient_0 = Vector3::new(0.2, 0.2, 0.2);
+    let diffuse_0 = Vector3::new(0.5, 0.5, 0.5);
+    let specular_0 = Vector3::new(1.0, 1.0, 1.0);
+    let model_spec_0 = PointLightSpec::new(
+        ambient_0, 
+        diffuse_0, 
+        specular_0
+    );
+
+    let orbital_axis_0 = Vector3::new(0.0, 1.0, 1.0).normalize();
+    let orbital_speed_0 = 3.14159265;
+    let radial_speed_0 = 0.0;
+    let center_of_oscillation_0 = Vector3::new(3.0, 0.0, 0.0);
+    let radius_of_oscillation_0 = 0.4;
+    let kinematics_spec_0 = OrbitalKinematicsSpec::new(
+        *scene_center_world, 
+        radial_speed_0, 
+        center_of_oscillation_0, 
+        radius_of_oscillation_0, 
+        orbital_axis_0, 
+        orbital_speed_0
+    );
+
+    let position_0 = center_of_oscillation_0;
+    let forward_0 = -Vector3::unit_z();
+    let right_0 = Vector3::unit_x();
+    let up_0 = Vector3::unit_y();
+    let axis_0 = forward_0;
+    let attitude_0 = LightAttitudeSpec::new(
+        position_0,
+        forward_0,
+        right_0,
+        up_0,
+        axis_0
+    );
+    
+    let ambient_1 = Vector3::new(0.2, 0.2, 0.2);
+    let diffuse_1 = Vector3::new(0.5, 0.5, 0.5);
+    let specular_1 = Vector3::new(1.0, 1.0, 1.0);
+    let model_spec_1 = PointLightSpec::new(
+        ambient_1,
+        diffuse_1,
+        specular_1
+    );
+
+    let orbital_axis_1 = Vector3::new(0.0, 0.0, 1.0).normalize();
+    let orbital_speed_1 = 1.5;
+    let radial_speed_1 = 0.0;
+    let center_of_oscillation_1 = Vector3::new(0.0, 6.0, 0.0);
+    let radius_of_oscillation_1 = 1.0;
+    let kinematics_spec_1 = OrbitalKinematicsSpec::new(
+        *scene_center_world, 
+        radial_speed_1, 
+        center_of_oscillation_1, 
+        radius_of_oscillation_1, 
+        orbital_axis_1, 
+        orbital_speed_1
+    );
+
+    let position_1 = center_of_oscillation_1;
+    let forward_1 = -Vector3::unit_z();
+    let right_1 = Vector3::unit_x();
+    let up_1 = Vector3::unit_y();
+    let axis_1 = forward_0;
+    let attitude_1 = LightAttitudeSpec::new(
+        position_1,
+        forward_1,
+        right_1,
+        up_1,
+        axis_1
+    );
+    
+    let ambient_2 = Vector3::new(0.2, 0.2, 0.2);
+    let diffuse_2 = Vector3::new(0.5, 0.5, 0.5);
+    let specular_2 = Vector3::new(1.0, 1.0, 1.0);
+    let model_spec_2 = PointLightSpec::new(
+        ambient_2, 
+        diffuse_2, 
+        specular_2
+    );
+
+    let orbital_axis_2 = Vector3::new(1.0, 0.0, 0.0).normalize();
+    let orbital_speed_2 = 0.5;
+    let radial_speed_2 = 0.0;
+    let center_of_oscillation_2 = Vector3::new(0.0, 5.0, 5.0);
+    let radius_of_oscillation_2 = 0.25;
+    let kinematics_spec_2 = OrbitalKinematicsSpec::new(
+        *scene_center_world, 
+        radial_speed_2, 
+        center_of_oscillation_2, 
+        radius_of_oscillation_2, 
+        orbital_axis_2, 
+        orbital_speed_2
+    );
+
+    let position_2 = center_of_oscillation_2;
+    let forward_2 = -Vector3::unit_z();
+    let right_2 = Vector3::unit_x();
+    let up_2 = Vector3::unit_y();
+    let axis_2 = forward_0;
+    let attitude_2 = LightAttitudeSpec::new(
+        position_2,
+        forward_2,
+        right_2,
+        up_2,
+        axis_2
+    );
+
+    let light_0 = Light::new(
+        &model_spec_0, 
+        &attitude_0, 
+        &kinematics_spec_0
+    );
+    let light_1 = Light::new(
+        &model_spec_1, 
+        &attitude_1, 
+        &kinematics_spec_1
+    );
+    let light_2 = Light::new(
+        &model_spec_2, 
+        &attitude_2, 
+        &kinematics_spec_2
+    );
+
+    [light_0, light_1, light_2]
+}
+
+struct PositionKinematicsSpec<S> {
+    _marker: PhantomData<S>,
+}
+
+impl<S> PositionKinematicsSpec<S> {
+    fn new() -> Self {
+        PositionKinematicsSpec {
+            _marker: PhantomData,
+        }
+    }
+}
+
+struct PositionKinematics<S> {
+    _marker: PhantomData<S>,
+}
+
+impl<S> LightKinematics<S> for PositionKinematics<S> 
+    where S: ScalarFloat
+{
+    type Spec = PositionKinematicsSpec<S>;
+    type Args = (Vector3<S>, Vector3<S>);
+
+    fn from_spec(_spec: &Self::Spec) -> Self {
+        PositionKinematics {
+            _marker: PhantomData,
+        }
+    }
+
+    fn update(&mut self, _args: &Self::Args, elapsed: S) -> DeltaAttitude<S> {
+        unimplemented!()
+    }
+} 
+
+fn create_spot_light(camera: &PerspectiveFovCamera<f32>) -> FlashLight<f32> {  
     let position_0 = camera.position();
+    let forward_0 = camera.forward_axis();
+    let up_0 = camera.up_axis();
+    let right_0 = camera.right_axis();
+    let axis_0 = camera.rotation_axis();
+
     let direction_0 = camera.forward_axis();
     let cutoff_0 = Degrees(12.5).cos();
     let outer_cutoff_0 = Degrees(17.5).cos();
@@ -195,114 +478,33 @@ fn create_lights(
     let constant_0 = 1.0;
     let linear_0 = 0.09;
     let quadratic_0 = 0.032;
-    let spot_light_0 = SpotLight::new(
-        position_0, 
-        direction_0, 
-        cutoff_0, 
-        outer_cutoff_0, 
-        ambient_0, 
-        diffuse_0, 
+    let model_spec_0 = SpotLightSpec::new(
+        direction_0,
+        cutoff_0,
+        outer_cutoff_0,
+        ambient_0,
+        diffuse_0,
         specular_0,
         constant_0,
         linear_0,
-        quadratic_0
+        quadratic_0,
     );
-    let orbital_axis_0 = Vector3::new(0.0, 1.0, 1.0).normalize();
-    let orbital_speed_0 = 3.14159265;
-    let radial_speed_0 = 0.0;
-    let center_of_oscillation_0 = Vector3::new(3.0, 0.0, 0.0);
-    let radius_of_oscillation_0 = 0.4;
-    let kinematics_0= LightKinematics::new(
-        *scene_center_world, 
-        radial_speed_0, 
-        center_of_oscillation_0, 
-        radius_of_oscillation_0, 
-        orbital_axis_0, 
-        orbital_speed_0
+    let attitude_spec_0 = LightAttitudeSpec::new(
+        position_0,
+        forward_0,
+        right_0,
+        up_0,
+        axis_0
     );
-    let light_0 = Light { 
-        light: spot_light_0, 
-        kinematics: kinematics_0 
-    };
+    let kinematics_spec_0 = PositionKinematicsSpec::new();
 
-    [light_0]
-}
+    let light_0 = Light::new(
+        &model_spec_0, 
+        &attitude_spec_0,
+        &kinematics_spec_0 
+    );
 
-struct LightKinematics {
-    scene_center: Vector3<f32>,
-    radial_speed: f32,
-    center_of_oscillation: Vector3<f32>,
-    radius_of_oscillation: f32,
-    position: Vector3<f32>,
-    radial_unit_velocity: f32,
-    orbital_axis: Vector3<f32>,
-    orbital_speed: f32,
-}
-
-impl LightKinematics {
-    pub fn new(
-        scene_center: Vector3<f32>, 
-        radial_speed: f32, 
-        center_of_oscillation: Vector3<f32>, 
-        radius_of_oscillation: f32,
-        orbital_axis: Vector3<f32>,
-        orbital_speed: f32) -> LightKinematics {
-        
-        let radial_unit_velocity = 1.0;
-        let position = center_of_oscillation;
-        LightKinematics {
-            scene_center: scene_center,
-            radial_speed: radial_speed,
-            center_of_oscillation: center_of_oscillation,
-            radius_of_oscillation: radius_of_oscillation,
-            position: position,
-            radial_unit_velocity: radial_unit_velocity,
-            orbital_axis: orbital_axis.normalize(),
-            orbital_speed: orbital_speed,
-        }
-    }
-
-    #[inline]
-    fn position(&self) -> Vector3<f32> {
-        self.position
-    }
-
-    fn update(&mut self, elapsed_seconds: f32) {
-        self.radial_unit_velocity = if self.radial_unit_velocity < 0.0 {
-            -1.0 
-        } else { 
-            1.0 
-        };
-        let radius_center_of_oscillation = 
-            (self.center_of_oscillation - self.scene_center).magnitude();
-        let radial_vector: Vector3<f32> = (self.position - self.scene_center).normalize();
-        let radius_perihelion = radius_center_of_oscillation - self.radius_of_oscillation;
-        let radius_aphelion = radius_center_of_oscillation + self.radius_of_oscillation;
-        let mut distance_from_scene_center = (self.position - self.scene_center).magnitude();
-        distance_from_scene_center = 
-            distance_from_scene_center + 
-            (self.radial_speed * elapsed_seconds) * self.radial_unit_velocity;
-        if distance_from_scene_center < radius_perihelion {
-            distance_from_scene_center = radius_perihelion;
-            self.radial_unit_velocity = 1.0;
-        } else if distance_from_scene_center > radius_aphelion {
-            distance_from_scene_center = radius_aphelion;
-            self.radial_unit_velocity = -1.0;
-        }
-    
-        let orbital_axis = Unit::from_value(self.orbital_axis);
-        let q = Quaternion::from_axis_angle(
-            &orbital_axis, Radians(self.orbital_speed * elapsed_seconds)
-        );
-        let rot_mat = Matrix4::from(q);
-        let new_position = rot_mat * (distance_from_scene_center * radial_vector).expand(1.0);
-
-        self.position = new_position.contract();
-    }
-
-    fn model_mat(&self) -> Matrix4<f32> {
-        Matrix4::from_affine_translation(&self.position)
-    }
+    light_0
 }
 
 struct TextureImage2D {
@@ -374,11 +576,11 @@ fn send_to_gpu_uniforms_camera(
     shader: GLuint, camera: &Camera<f32, PerspectiveFovProjection<f32>, FreeKinematics<f32>>) {
     
     let camera_proj_mat_loc = unsafe {
-        gl::GetUniformLocation(shader, backend::gl_str("projection").as_ptr())
+        gl::GetUniformLocation(shader, backend::gl_str("camera.projection").as_ptr())
     };
     debug_assert!(camera_proj_mat_loc > -1);
     let camera_view_mat_loc = unsafe {
-        gl::GetUniformLocation(shader, backend::gl_str("view").as_ptr())
+        gl::GetUniformLocation(shader, backend::gl_str("camera.view").as_ptr())
     };
     debug_assert!(camera_view_mat_loc > -1);
 
@@ -400,6 +602,92 @@ fn send_to_gpu_uniforms_camera(
 }
 
 /// Send the uniforms for the lighting data to the GPU for the mesh.
+/// Note that in order to render multiple lights in the shader, we define an array
+/// of structs. In OpenGL, each elementary member of a struct is considered to be a uniform variable,
+/// and each struct is a struct of uniforms. Consequently, if every element of an array of struct uniforms
+/// is not used in the shader, OpenGL will optimize those uniform locations out at runtime. This
+/// will cause OpenGL to return a `GL_INVALID_VALUE` on a call to `glGetUniformLocation`.
+fn send_to_gpu_uniforms_cube_light(shader: GLuint, lights: &[CubeLight<f32>; 3]) {
+    let light_position_world_loc = unsafe {
+        gl::GetUniformLocation(shader, backend::gl_str("lights[0].position_world").as_ptr())
+    };
+    debug_assert!(light_position_world_loc > -1);
+    let light_ambient_loc = unsafe {
+        gl::GetUniformLocation(shader, backend::gl_str("lights[0].ambient").as_ptr())
+    };
+    debug_assert!(light_ambient_loc > -1);
+    let light_diffuse_loc = unsafe {
+        gl::GetUniformLocation(shader, backend::gl_str("lights[0].diffuse").as_ptr())
+    };
+    debug_assert!(light_diffuse_loc > -1);
+    let light_specular_loc = unsafe { 
+        gl::GetUniformLocation(shader, backend::gl_str("lights[0].specular").as_ptr())
+    };
+    debug_assert!(light_specular_loc > -1);
+
+    let model_0 = lights[0].model();
+    unsafe {
+        gl::UseProgram(shader);
+        gl::Uniform3fv(light_position_world_loc, 1, lights[0].position().as_ptr());
+        gl::Uniform3fv(light_ambient_loc, 1, model_0.ambient.as_ptr());
+        gl::Uniform3fv(light_diffuse_loc, 1, model_0.diffuse.as_ptr());
+        gl::Uniform3fv(light_specular_loc, 1, model_0.specular.as_ptr());
+    }
+
+    let light_position_world_loc = unsafe {
+        gl::GetUniformLocation(shader, backend::gl_str("lights[1].position_world").as_ptr())
+    };
+    debug_assert!(light_position_world_loc > -1);
+    let light_ambient_loc = unsafe {
+        gl::GetUniformLocation(shader, backend::gl_str("lights[1].ambient").as_ptr())
+    };
+    debug_assert!(light_ambient_loc > -1);
+    let light_diffuse_loc = unsafe {
+        gl::GetUniformLocation(shader, backend::gl_str("lights[1].diffuse").as_ptr())
+    };
+    debug_assert!(light_diffuse_loc > -1);
+    let light_specular_loc = unsafe { 
+        gl::GetUniformLocation(shader, backend::gl_str("lights[1].specular").as_ptr())
+    };
+    debug_assert!(light_specular_loc > -1);
+
+    let model_1 = lights[1].model();
+    unsafe {
+        gl::UseProgram(shader);
+        gl::Uniform3fv(light_position_world_loc, 1, lights[1].position().as_ptr());
+        gl::Uniform3fv(light_ambient_loc, 1, model_1.ambient.as_ptr());
+        gl::Uniform3fv(light_diffuse_loc, 1, model_1.diffuse.as_ptr());
+        gl::Uniform3fv(light_specular_loc, 1, model_1.specular.as_ptr());
+    }
+
+    let light_position_world_loc = unsafe {
+        gl::GetUniformLocation(shader, backend::gl_str("lights[2].position_world").as_ptr())
+    };
+    debug_assert!(light_position_world_loc > -1);
+    let light_ambient_loc = unsafe {
+        gl::GetUniformLocation(shader, backend::gl_str("lights[2].ambient").as_ptr())
+    };
+    debug_assert!(light_ambient_loc > -1);
+    let light_diffuse_loc = unsafe {
+        gl::GetUniformLocation(shader, backend::gl_str("lights[2].diffuse").as_ptr())
+    };
+    debug_assert!(light_diffuse_loc > -1);
+    let light_specular_loc = unsafe { 
+        gl::GetUniformLocation(shader, backend::gl_str("lights[2].specular").as_ptr())
+    };
+    debug_assert!(light_specular_loc > -1);
+
+    let model_2 = lights[2].model();
+    unsafe {
+        gl::UseProgram(shader);
+        gl::Uniform3fv(light_position_world_loc, 1, lights[2].position().as_ptr());
+        gl::Uniform3fv(light_ambient_loc, 1, model_2.ambient.as_ptr());
+        gl::Uniform3fv(light_diffuse_loc, 1, model_2.diffuse.as_ptr());
+        gl::Uniform3fv(light_specular_loc, 1, model_2.specular.as_ptr());
+    }
+}
+
+/// Send the uniforms for the lighting data to the GPU for the mesh.
 /// Note that in order to render multiple lights in the shader, we define an 
 /// array of structs. In OpenGL, each elementary member of a struct is 
 /// considered to be a uniform variable, and each struct is a struct of uniforms. 
@@ -407,7 +695,7 @@ fn send_to_gpu_uniforms_camera(
 /// the shader, OpenGL will optimize those uniform locations out at runtime. This
 /// will cause OpenGL to return a `GL_INVALID_VALUE` on a call to 
 /// `glGetUniformLocation`.
-fn send_to_gpu_uniforms_light(shader: GLuint, light: &Light) {
+fn send_to_gpu_uniforms_spot_light(shader: GLuint, light: &FlashLight<f32>) {
     let light_position_world_loc = unsafe {
         gl::GetUniformLocation(shader, backend::gl_str("light.position").as_ptr())
     };
@@ -449,18 +737,19 @@ fn send_to_gpu_uniforms_light(shader: GLuint, light: &Light) {
     };
     debug_assert!(light_quadratic_loc > -1);
 
+    let model = light.model();
     unsafe {
         gl::UseProgram(shader);
-        gl::Uniform3fv(light_position_world_loc, 1, light.light.position.as_ptr());
-        gl::Uniform3fv(light_direction_loc, 1, light.light.direction.as_ptr());
-        gl::Uniform1f(light_cutoff_loc, light.light.cutoff);
-        gl::Uniform1f(light_outer_cutoff_loc, light.light.outer_cutoff);
-        gl::Uniform3fv(light_ambient_loc, 1, light.light.ambient.as_ptr());
-        gl::Uniform3fv(light_diffuse_loc, 1, light.light.diffuse.as_ptr());
-        gl::Uniform3fv(light_specular_loc, 1, light.light.specular.as_ptr());
-        gl::Uniform1f(light_constant_loc, light.light.constant);
-        gl::Uniform1f(light_linear_loc, light.light.linear);
-        gl::Uniform1f(light_quadratic_loc, light.light.quadratic);
+        gl::Uniform3fv(light_position_world_loc, 1, light.position().as_ptr());
+        gl::Uniform3fv(light_direction_loc, 1, model.direction.as_ptr());
+        gl::Uniform1f(light_cutoff_loc, model.cutoff);
+        gl::Uniform1f(light_outer_cutoff_loc, model.outer_cutoff);
+        gl::Uniform3fv(light_ambient_loc, 1, model.ambient.as_ptr());
+        gl::Uniform3fv(light_diffuse_loc, 1, model.diffuse.as_ptr());
+        gl::Uniform3fv(light_specular_loc, 1, model.specular.as_ptr());
+        gl::Uniform1f(light_constant_loc, model.constant);
+        gl::Uniform1f(light_linear_loc, model.linear);
+        gl::Uniform1f(light_quadratic_loc, model.quadratic);
     }
 }
 
@@ -584,7 +873,7 @@ fn send_to_gpu_mesh(shader: GLuint, mesh: &ObjMesh) -> (GLuint, GLuint, GLuint, 
 
 fn send_to_gpu_light_mesh(shader: GLuint, mesh: &ObjMesh) -> (GLuint, GLuint) {
     let v_pos_loc = unsafe {
-        gl::GetAttribLocation(shader, backend::gl_str("aPos").as_ptr())
+        gl::GetAttribLocation(shader, backend::gl_str("v_pos").as_ptr())
     };
     debug_assert!(v_pos_loc > -1);
     let v_pos_loc = v_pos_loc as u32;
@@ -657,18 +946,18 @@ struct ShaderSource {
 }
 
 fn create_mesh_shader_source() -> ShaderSource {
-    let vert_source = include_str!("../shaders/light_casters.vert.glsl");
-    let frag_source = include_str!("../shaders/light_casters.frag.glsl");
+    let vert_source = include_str!("../shaders/lighting_map.vert.glsl");
+    let frag_source = include_str!("../shaders/lighting_map.frag.glsl");
     
     ShaderSource {
-        vert_name: "light_casters.vert.glsl",
+        vert_name: "lighting_map.vert.glsl",
         vert_source: vert_source,
-        frag_name: "light_casters.frag.glsl",
+        frag_name: "lighting_map.frag.glsl",
         frag_source: frag_source,
     }
 }
 
-fn create_light_shader_source() -> ShaderSource {
+fn create_cube_light_shader_source() -> ShaderSource {
     let vert_source = include_str!("../shaders/lighting_cube.vert.glsl");
     let frag_source = include_str!("../shaders/lighting_cube.frag.glsl");
 
@@ -828,7 +1117,7 @@ fn main() {
     info!("BEGIN LOG");
     let scene_center_world = Vector3::<f32>::zero();
     let mut camera = create_camera(SCREEN_WIDTH, SCREEN_HEIGHT);
-    let mut lights: [Light; 1] = create_lights(&scene_center_world, &camera);
+    let mut cube_lights= create_cube_lights(&scene_center_world);
     let material_diffuse_index = 0;
     let material_specular_index = 1;
     let material = material::sgi_material_table()["chrome"];
@@ -855,7 +1144,7 @@ fn main() {
     let (diffuse_tex, specular_tex) = send_to_gpu_textures_material(&lighting_map);
 
     // Load the lighting cube model.
-    let light_shader_source = create_light_shader_source();
+    let light_shader_source = create_cube_light_shader_source();
     let light_shader = send_to_gpu_shaders(&mut context, light_shader_source);
     let (
         light_vao,
@@ -879,11 +1168,14 @@ fn main() {
             framebuffer_size_callback(&mut context, width as u32, height as u32);
         }
 
+        cube_lights[0].update(&(), elapsed_seconds as f32);
+        cube_lights[1].update(&(), elapsed_seconds as f32);
+        cube_lights[2].update(&(), elapsed_seconds as f32);
         let delta_movement = process_input(&mut context);
         camera.update_movement(delta_movement, elapsed_seconds as f32);
         send_to_gpu_uniforms_camera(mesh_shader, &camera);
         send_to_gpu_uniforms_camera(light_shader, &camera);
-        send_to_gpu_uniforms_light(mesh_shader, &lights[0]);
+        send_to_gpu_uniforms_cube_light(mesh_shader, &cube_lights);
 
         // Illuminate the cube.
         unsafe {
@@ -899,15 +1191,14 @@ fn main() {
             gl::DrawArrays(gl::TRIANGLES, 0, mesh.len() as i32);
         }
         // Render the lights.
-        let light_model_mat = lights[0].kinematics.model_mat() * Matrix4::from_affine_scale(0.2);
+        let light_model_mat = cube_lights[0].model_mat() * Matrix4::from_affine_scale(0.2);
         send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
             gl::BindVertexArray(light_vao);
             gl::DrawArrays(gl::TRIANGLES, 0, light_mesh.len() as i32);
         }
-        /*
-        let light_model_mat = lights[1].kinematics.model_mat() * Matrix4::from_affine_scale(0.2);
+        let light_model_mat = cube_lights[1].model_mat() * Matrix4::from_affine_scale(0.2);
         send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
@@ -915,14 +1206,14 @@ fn main() {
             gl::DrawArrays(gl::TRIANGLES, 0, light_mesh.len() as i32);
         }
         
-        let light_model_mat = lights[2].kinematics.model_mat() * Matrix4::from_affine_scale(0.2);
+        let light_model_mat = cube_lights[2].model_mat() * Matrix4::from_affine_scale(0.2);
         send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
             gl::BindVertexArray(light_vao);
             gl::DrawArrays(gl::TRIANGLES, 0, light_mesh.len() as i32);
         }
-        */
+
         context.window.swap_buffers();
     }
 
