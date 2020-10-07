@@ -12,7 +12,6 @@ mod gl {
 }
 
 mod backend;
-mod light;
 mod material;
 
 
@@ -63,21 +62,14 @@ use mini_obj::{
 use crate::backend::{
     OpenGLContext,
 };
-use crate::light::{
+use cgilluminate::{
     Light,
-    LightKinematics,
     LightAttitudeSpec,
-    PointLightSpec,
+    PointLightModelSpec,
     PointLight,
-    SpotLightSpec,
+    SpotLightModelSpec,
     SpotLight,
-    FixedPositionKinematicsSpec,
-    FixedPositionKinematics,
     DeltaAttitude,
-};
-
-use std::marker::{
-    PhantomData,
 };
 
 use std::io;
@@ -194,8 +186,6 @@ fn create_camera(width: u32, height: u32) -> Camera<f32, PerspectiveFovProjectio
 }
 
 type PerspectiveFovCamera<S> = Camera<S, PerspectiveFovProjection<S>, FreeKinematics<S>>;
-type CubeLight<S> = Light<S, PointLight<S>, OrbitalKinematics<S>>;
-type FlashLight<S> = Light<S, SpotLight<S>, PositionKinematics<S>>;
 
 
 struct OrbitalKinematicsSpec<S> {
@@ -238,11 +228,8 @@ struct OrbitalKinematics<S> {
     orbital_speed: S,
 }
 
-impl<S> LightKinematics<S> for OrbitalKinematics<S> where S: ScalarFloat {
-    type Spec = OrbitalKinematicsSpec<S>;
-    type Args = ();
-    
-    fn from_spec(spec: &Self::Spec) -> Self {
+impl<S> OrbitalKinematics<S> where S: ScalarFloat {    
+    fn from_spec(spec: &OrbitalKinematicsSpec<S>) -> Self {
         let radial_unit_velocity = S::one();
         let position = spec.center_of_oscillation;
 
@@ -258,7 +245,7 @@ impl<S> LightKinematics<S> for OrbitalKinematics<S> where S: ScalarFloat {
         }
     }
 
-    fn update(&mut self, args: &Self::Args, elapsed: S) -> DeltaAttitude<S> {
+    fn update(&mut self, elapsed: S) -> DeltaAttitude<S> {
         self.radial_unit_velocity = if self.radial_unit_velocity < S::zero() {
             -S::one() 
         } else { 
@@ -287,13 +274,12 @@ impl<S> LightKinematics<S> for OrbitalKinematics<S> where S: ScalarFloat {
         );
         let rot_mat = Matrix4::from(q);
         let new_position = rot_mat * (radial_vector * distance_from_scene_center).expand(S::one());
-
-        self.position = new_position.contract();
+        let new_position = new_position.contract();
+        let delta_position = new_position - self.position;
+        self.position = new_position;
 
         DeltaAttitude::new(
-            self.position.x, 
-            self.position.y, 
-            self.position.z, 
+            delta_position,
             S::zero(), 
             S::zero(), 
             S::zero()
@@ -301,11 +287,34 @@ impl<S> LightKinematics<S> for OrbitalKinematics<S> where S: ScalarFloat {
     }
 }
 
+struct CubeLight<S> {
+    light: PointLight<S>,
+    kinematics: OrbitalKinematics<S>,
+}
+
+impl<S> CubeLight<S> where S: ScalarFloat {
+    fn new(light: PointLight<S>, kinematics: OrbitalKinematics<S>) -> Self {
+        Self {
+            light: light,
+            kinematics: kinematics,
+        }
+    }
+
+    fn update(&mut self, elapsed: S) {
+
+    }
+
+    #[inline]
+    fn model_matrix(&self) -> Matrix4<S> {
+        self.light.model_matrix()
+    }
+}
+
 fn create_cube_lights(scene_center_world: &Vector3<f32>) -> [CubeLight<f32>; 3] {
     let ambient_0 = Vector3::new(0.2, 0.2, 0.2);
     let diffuse_0 = Vector3::new(0.5, 0.5, 0.5);
     let specular_0 = Vector3::new(1.0, 1.0, 1.0);
-    let model_spec_0 = PointLightSpec::new(
+    let model_spec_0 = PointLightModelSpec::new(
         ambient_0, 
         diffuse_0, 
         specular_0
@@ -324,6 +333,7 @@ fn create_cube_lights(scene_center_world: &Vector3<f32>) -> [CubeLight<f32>; 3] 
         orbital_axis_0, 
         orbital_speed_0
     );
+    let kinematics_0 = OrbitalKinematics::from_spec(&kinematics_spec_0);
 
     let position_0 = center_of_oscillation_0;
     let forward_0 = -Vector3::unit_z();
@@ -341,7 +351,7 @@ fn create_cube_lights(scene_center_world: &Vector3<f32>) -> [CubeLight<f32>; 3] 
     let ambient_1 = Vector3::new(0.2, 0.2, 0.2);
     let diffuse_1 = Vector3::new(0.5, 0.5, 0.5);
     let specular_1 = Vector3::new(1.0, 1.0, 1.0);
-    let model_spec_1 = PointLightSpec::new(
+    let model_spec_1 = PointLightModelSpec::new(
         ambient_1,
         diffuse_1,
         specular_1
@@ -360,6 +370,7 @@ fn create_cube_lights(scene_center_world: &Vector3<f32>) -> [CubeLight<f32>; 3] 
         orbital_axis_1, 
         orbital_speed_1
     );
+    let kinematics_1 = OrbitalKinematics::from_spec(&kinematics_spec_1);
 
     let position_1 = center_of_oscillation_1;
     let forward_1 = -Vector3::unit_z();
@@ -377,7 +388,7 @@ fn create_cube_lights(scene_center_world: &Vector3<f32>) -> [CubeLight<f32>; 3] 
     let ambient_2 = Vector3::new(0.2, 0.2, 0.2);
     let diffuse_2 = Vector3::new(0.5, 0.5, 0.5);
     let specular_2 = Vector3::new(1.0, 1.0, 1.0);
-    let model_spec_2 = PointLightSpec::new(
+    let model_spec_2 = PointLightModelSpec::new(
         ambient_2, 
         diffuse_2, 
         specular_2
@@ -396,6 +407,7 @@ fn create_cube_lights(scene_center_world: &Vector3<f32>) -> [CubeLight<f32>; 3] 
         orbital_axis_2, 
         orbital_speed_2
     );
+    let kinematics_2 = OrbitalKinematics::from_spec(&kinematics_spec_2);
 
     let position_2 = center_of_oscillation_2;
     let forward_2 = -Vector3::unit_z();
@@ -410,59 +422,27 @@ fn create_cube_lights(scene_center_world: &Vector3<f32>) -> [CubeLight<f32>; 3] 
         axis_2
     );
 
-    let light_0 = Light::new(
+    let point_light_0 = Light::new(
         &model_spec_0, 
         &attitude_0, 
-        &kinematics_spec_0
     );
-    let light_1 = Light::new(
+    let point_light_1 = Light::new(
         &model_spec_1, 
         &attitude_1, 
-        &kinematics_spec_1
     );
-    let light_2 = Light::new(
+    let point_light_2 = Light::new(
         &model_spec_2, 
         &attitude_2, 
-        &kinematics_spec_2
     );
+
+    let light_0 = CubeLight::new(point_light_0, kinematics_0);
+    let light_1 = CubeLight::new(point_light_1, kinematics_1);
+    let light_2 = CubeLight::new(point_light_2, kinematics_2);
 
     [light_0, light_1, light_2]
 }
 
-struct PositionKinematicsSpec<S> {
-    _marker: PhantomData<S>,
-}
-
-impl<S> PositionKinematicsSpec<S> {
-    fn new() -> Self {
-        PositionKinematicsSpec {
-            _marker: PhantomData,
-        }
-    }
-}
-
-struct PositionKinematics<S> {
-    _marker: PhantomData<S>,
-}
-
-impl<S> LightKinematics<S> for PositionKinematics<S> 
-    where S: ScalarFloat
-{
-    type Spec = PositionKinematicsSpec<S>;
-    type Args = (Vector3<S>, Vector3<S>);
-
-    fn from_spec(_spec: &Self::Spec) -> Self {
-        PositionKinematics {
-            _marker: PhantomData,
-        }
-    }
-
-    fn update(&mut self, _args: &Self::Args, elapsed: S) -> DeltaAttitude<S> {
-        unimplemented!()
-    }
-} 
-
-fn create_spot_light(camera: &PerspectiveFovCamera<f32>) -> FlashLight<f32> {  
+fn create_spot_light(camera: &PerspectiveFovCamera<f32>) -> SpotLight<f32> {  
     let position_0 = camera.position();
     let forward_0 = camera.forward_axis();
     let up_0 = camera.up_axis();
@@ -478,8 +458,7 @@ fn create_spot_light(camera: &PerspectiveFovCamera<f32>) -> FlashLight<f32> {
     let constant_0 = 1.0;
     let linear_0 = 0.09;
     let quadratic_0 = 0.032;
-    let model_spec_0 = SpotLightSpec::new(
-        direction_0,
+    let model_spec_0 = SpotLightModelSpec::new(
         cutoff_0,
         outer_cutoff_0,
         ambient_0,
@@ -496,12 +475,11 @@ fn create_spot_light(camera: &PerspectiveFovCamera<f32>) -> FlashLight<f32> {
         up_0,
         axis_0
     );
-    let kinematics_spec_0 = PositionKinematicsSpec::new();
+    //let kinematics_spec_0 = PositionKinematicsSpec::new();
 
     let light_0 = Light::new(
         &model_spec_0, 
         &attitude_spec_0,
-        &kinematics_spec_0 
     );
 
     light_0
@@ -625,10 +603,10 @@ fn send_to_gpu_uniforms_cube_light(shader: GLuint, lights: &[CubeLight<f32>; 3])
     };
     debug_assert!(light_specular_loc > -1);
 
-    let model_0 = lights[0].model();
+    let model_0 = lights[0].light.model();
     unsafe {
         gl::UseProgram(shader);
-        gl::Uniform3fv(light_position_world_loc, 1, lights[0].position().as_ptr());
+        gl::Uniform3fv(light_position_world_loc, 1, lights[0].light.position().as_ptr());
         gl::Uniform3fv(light_ambient_loc, 1, model_0.ambient.as_ptr());
         gl::Uniform3fv(light_diffuse_loc, 1, model_0.diffuse.as_ptr());
         gl::Uniform3fv(light_specular_loc, 1, model_0.specular.as_ptr());
@@ -651,10 +629,10 @@ fn send_to_gpu_uniforms_cube_light(shader: GLuint, lights: &[CubeLight<f32>; 3])
     };
     debug_assert!(light_specular_loc > -1);
 
-    let model_1 = lights[1].model();
+    let model_1 = lights[1].light.model();
     unsafe {
         gl::UseProgram(shader);
-        gl::Uniform3fv(light_position_world_loc, 1, lights[1].position().as_ptr());
+        gl::Uniform3fv(light_position_world_loc, 1, lights[1].light.position().as_ptr());
         gl::Uniform3fv(light_ambient_loc, 1, model_1.ambient.as_ptr());
         gl::Uniform3fv(light_diffuse_loc, 1, model_1.diffuse.as_ptr());
         gl::Uniform3fv(light_specular_loc, 1, model_1.specular.as_ptr());
@@ -677,10 +655,10 @@ fn send_to_gpu_uniforms_cube_light(shader: GLuint, lights: &[CubeLight<f32>; 3])
     };
     debug_assert!(light_specular_loc > -1);
 
-    let model_2 = lights[2].model();
+    let model_2 = lights[2].light.model();
     unsafe {
         gl::UseProgram(shader);
-        gl::Uniform3fv(light_position_world_loc, 1, lights[2].position().as_ptr());
+        gl::Uniform3fv(light_position_world_loc, 1, lights[2].light.position().as_ptr());
         gl::Uniform3fv(light_ambient_loc, 1, model_2.ambient.as_ptr());
         gl::Uniform3fv(light_diffuse_loc, 1, model_2.diffuse.as_ptr());
         gl::Uniform3fv(light_specular_loc, 1, model_2.specular.as_ptr());
@@ -695,7 +673,7 @@ fn send_to_gpu_uniforms_cube_light(shader: GLuint, lights: &[CubeLight<f32>; 3])
 /// the shader, OpenGL will optimize those uniform locations out at runtime. This
 /// will cause OpenGL to return a `GL_INVALID_VALUE` on a call to 
 /// `glGetUniformLocation`.
-fn send_to_gpu_uniforms_spot_light(shader: GLuint, light: &FlashLight<f32>) {
+fn send_to_gpu_uniforms_spot_light(shader: GLuint, light: &SpotLight<f32>) {
     let light_position_world_loc = unsafe {
         gl::GetUniformLocation(shader, backend::gl_str("light.position").as_ptr())
     };
@@ -741,7 +719,7 @@ fn send_to_gpu_uniforms_spot_light(shader: GLuint, light: &FlashLight<f32>) {
     unsafe {
         gl::UseProgram(shader);
         gl::Uniform3fv(light_position_world_loc, 1, light.position().as_ptr());
-        gl::Uniform3fv(light_direction_loc, 1, model.direction.as_ptr());
+        gl::Uniform3fv(light_direction_loc, 1, light.forward_axis().as_ptr());
         gl::Uniform1f(light_cutoff_loc, model.cutoff);
         gl::Uniform1f(light_outer_cutoff_loc, model.outer_cutoff);
         gl::Uniform3fv(light_ambient_loc, 1, model.ambient.as_ptr());
@@ -1168,9 +1146,9 @@ fn main() {
             framebuffer_size_callback(&mut context, width as u32, height as u32);
         }
 
-        cube_lights[0].update(&(), elapsed_seconds as f32);
-        cube_lights[1].update(&(), elapsed_seconds as f32);
-        cube_lights[2].update(&(), elapsed_seconds as f32);
+        cube_lights[0].update(elapsed_seconds as f32);
+        cube_lights[1].update(elapsed_seconds as f32);
+        cube_lights[2].update(elapsed_seconds as f32);
         let delta_movement = process_input(&mut context);
         camera.update_movement(delta_movement, elapsed_seconds as f32);
         send_to_gpu_uniforms_camera(mesh_shader, &camera);
@@ -1191,14 +1169,14 @@ fn main() {
             gl::DrawArrays(gl::TRIANGLES, 0, mesh.len() as i32);
         }
         // Render the lights.
-        let light_model_mat = cube_lights[0].model_mat() * Matrix4::from_affine_scale(0.2);
+        let light_model_mat = cube_lights[0].model_matrix() * Matrix4::from_affine_scale(0.2);
         send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
             gl::BindVertexArray(light_vao);
             gl::DrawArrays(gl::TRIANGLES, 0, light_mesh.len() as i32);
         }
-        let light_model_mat = cube_lights[1].model_mat() * Matrix4::from_affine_scale(0.2);
+        let light_model_mat = cube_lights[1].model_matrix() * Matrix4::from_affine_scale(0.2);
         send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
@@ -1206,7 +1184,7 @@ fn main() {
             gl::DrawArrays(gl::TRIANGLES, 0, light_mesh.len() as i32);
         }
         
-        let light_model_mat = cube_lights[2].model_mat() * Matrix4::from_affine_scale(0.2);
+        let light_model_mat = cube_lights[2].model_matrix() * Matrix4::from_affine_scale(0.2);
         send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
