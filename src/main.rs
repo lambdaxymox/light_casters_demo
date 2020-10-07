@@ -179,7 +179,7 @@ fn create_camera(width: u32, height: u32) -> PerspectiveFovCamera<f32> {
         axis,
     );
     let movement_speed = 5.0;
-    let rotation_speed = 50.0;
+    let rotation_speed = Degrees(50.0);
     let kinematics_spec = FreeKinematicsSpec::new(
         movement_speed, 
         rotation_speed

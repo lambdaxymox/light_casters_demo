@@ -79,8 +79,8 @@ dependencies = [
 
 [[package]]
 name = "cgperspective"
-version = "0.1.9"
-source = "git+https://github.com/lambdaxymox/cgperspective#ae578f8273c025683f30aac976f51270fe516011"
+version = "0.1.10"
+source = "git+https://github.com/lambdaxymox/cgperspective#885ea54ad621ba613e0213a48c20a1ef2082cf6d"
 dependencies = [
  "cglinalg",
 ]
