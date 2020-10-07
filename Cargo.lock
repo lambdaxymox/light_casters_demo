@@ -63,7 +63,7 @@ checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 [[package]]
 name = "cgilluminate"
 version = "0.1.0"
-source = "git+https://github.com/lambdaxymox/cgilluminate#a4ee094624c5fcecb3e48cbbc216fa1c5ae8f913"
+source = "git+https://github.com/lambdaxymox/cgilluminate#a91453a9035caddb614d33825864f6b7edde747e"
 dependencies = [
  "cglinalg",
 ]
@@ -79,8 +79,8 @@ dependencies = [
 
 [[package]]
 name = "cgperspective"
-version = "0.1.10"
-source = "git+https://github.com/lambdaxymox/cgperspective#885ea54ad621ba613e0213a48c20a1ef2082cf6d"
+version = "0.1.12"
+source = "git+https://github.com/lambdaxymox/cgperspective#150ef19465e81f88e2c32ac3d67a734d468fc424"
 dependencies = [
  "cglinalg",
 ]
