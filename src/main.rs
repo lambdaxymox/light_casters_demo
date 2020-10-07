@@ -281,10 +281,6 @@ impl<S> OrbitalKinematics<S> where S: ScalarFloat {
 
         &self.position
     }
-
-    fn model_matrix(&self) -> Matrix4<S> {
-        Matrix4::from_affine_translation(&self.position)
-    }
 }
 
 struct CubeLight<S> {
@@ -306,18 +302,19 @@ impl<S> CubeLight<S> where S: ScalarFloat {
     }
 
     #[inline]
-    fn position(&self) -> &Vector3<S> {
-        &self.kinematics.position
+    fn position(&self) -> Vector3<S> {
+        self.light.position()
     }
 
     #[inline]
     fn update(&mut self, elapsed: S) {
         self.kinematics.update(elapsed);
+        self.light.update_position_world(&self.kinematics.position);
     }
 
     #[inline]
     fn model_matrix(&self) -> Matrix4<S> {
-        self.kinematics.model_matrix()
+        self.light.model_matrix()
     }
 }
 
