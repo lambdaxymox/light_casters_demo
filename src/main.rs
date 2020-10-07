@@ -71,6 +71,7 @@ use cgilluminate::{
     SpotLightModelSpec,
     SpotLight,
     DeltaAttitude,
+    SpotLightModel,
 };
 
 use std::io;
@@ -450,7 +451,76 @@ fn create_cube_lights(scene_center_world: &Vector3<f32>) -> [CubeLight<f32>; 3] 
     [light_0, light_1, light_2]
 }
 
-fn create_spot_light(camera: &PerspectiveFovCamera<f32>) -> SpotLight<f32> {  
+
+struct FlashLightKinematics<S> {
+    position: Vector3<S>,
+    forward: Vector3<S>,
+    up: Vector3<S>,
+    right: Vector3<S>,
+    axis: Vector3<S>,
+}
+
+impl<S> FlashLightKinematics<S> where S: ScalarFloat {
+    fn new(camera: &PerspectiveFovCamera<S>) -> Self {
+        Self {
+            position: camera.position(),
+            forward: camera.forward_axis(),
+            up: camera.up_axis(),
+            right: camera.right_axis(),
+            axis: camera.rotation_axis(),
+        }
+    }
+
+    fn update(&mut self, camera: &PerspectiveFovCamera<S>, _elapsed: S) {
+        self.position = camera.position();
+        self.forward = camera.forward_axis();
+        self.up = camera.up_axis();
+        self.right = camera.right_axis();
+        self.axis = camera.rotation_axis();
+    }
+}
+
+struct FlashLight<S> {
+    light: SpotLight<S>,
+    kinematics: FlashLightKinematics<S>,
+}
+
+impl<S> FlashLight<S> where S: ScalarFloat {
+    fn new(light: SpotLight<S>, kinematics: FlashLightKinematics<S>) -> Self {
+        Self {
+            light: light,
+            kinematics: kinematics,
+        }
+    }
+
+    #[inline]
+    fn model(&self) -> &SpotLightModel<S> {
+        self.light.model()
+    }
+
+    #[inline]
+    fn direction(&self) -> Vector3<S> {
+        self.kinematics.forward
+    }
+
+    #[inline]
+    fn position(&self) -> Vector3<S> {
+        self.light.position()
+    }
+
+    #[inline]
+    fn update(&mut self, camera: &PerspectiveFovCamera<S>, _elapsed: S) {
+        self.kinematics.update(camera, _elapsed);
+        self.light.update_position_world(&self.kinematics.position);
+    }
+
+    #[inline]
+    fn model_matrix(&self) -> Matrix4<S> {
+        self.light.model_matrix()
+    }
+}
+
+fn create_flashlight(camera: &PerspectiveFovCamera<f32>) -> FlashLight<f32> {  
     let position_0 = camera.position();
     let forward_0 = camera.forward_axis();
     let up_0 = camera.up_axis();
@@ -483,13 +553,13 @@ fn create_spot_light(camera: &PerspectiveFovCamera<f32>) -> SpotLight<f32> {
         up_0,
         axis_0
     );
-    //let kinematics_spec_0 = PositionKinematicsSpec::new();
-
-    let light_0 = Light::new(
+    let kinematics_0 = FlashLightKinematics::new(camera);
+    let spot_light_0 = Light::new(
         &model_spec_0, 
         &attitude_spec_0,
     );
-
+    let light_0 = FlashLight::new(spot_light_0, kinematics_0);
+    
     light_0
 }
 
@@ -546,7 +616,19 @@ fn create_lighting_map() -> LightingMap {
     }
 }
 
-fn send_to_gpu_uniforms_mesh(shader: GLuint, model_mat: &Matrix4<f32>) {
+fn send_to_gpu_uniforms_cube_light_mesh(shader: GLuint, model_mat: &Matrix4<f32>) {
+    let model_mat_loc = unsafe {
+        gl::GetUniformLocation(shader, backend::gl_str("model").as_ptr())
+    };
+    debug_assert!(model_mat_loc > -1);
+    
+    unsafe {
+        gl::UseProgram(shader);
+        gl::UniformMatrix4fv(model_mat_loc, 1, gl::FALSE, model_mat.as_ptr());
+    }
+}
+
+fn send_to_gpu_uniforms_flashlight_mesh(shader: GLuint, model_mat: &Matrix4<f32>) {
     let model_mat_loc = unsafe {
         gl::GetUniformLocation(shader, backend::gl_str("model").as_ptr())
     };
@@ -681,7 +763,7 @@ fn send_to_gpu_uniforms_cube_light(shader: GLuint, lights: &[CubeLight<f32>; 3])
 /// the shader, OpenGL will optimize those uniform locations out at runtime. This
 /// will cause OpenGL to return a `GL_INVALID_VALUE` on a call to 
 /// `glGetUniformLocation`.
-fn send_to_gpu_uniforms_spot_light(shader: GLuint, light: &SpotLight<f32>) {
+fn send_to_gpu_uniforms_flashlight(shader: GLuint, light: &SpotLight<f32>) {
     let light_position_world_loc = unsafe {
         gl::GetUniformLocation(shader, backend::gl_str("light.position").as_ptr())
     };
@@ -746,6 +828,7 @@ fn send_to_gpu_textures_material(lighting_map: &LightingMap) -> (GLuint, GLuint)
     (diffuse_tex, specular_tex)
 }
 
+#[derive(Copy, Clone)]
 struct MaterialUniforms<'a> {
     diffuse_index: i32,
     specular_index: i32,
@@ -955,6 +1038,18 @@ fn create_cube_light_shader_source() -> ShaderSource {
     }
 }
 
+fn create_flashlight_shader_source() -> ShaderSource {
+    let vert_source = include_str!("../shaders/light_casters.vert.glsl");
+    let frag_source = include_str!("../shaders/light_casters.frag.glsl");
+    
+    ShaderSource {
+        vert_name: "light_casters.vert.glsl",
+        vert_source: vert_source,
+        frag_name: "light_casters.frag.glsl",
+        frag_source: frag_source,
+    }
+}
+
 fn send_to_gpu_shaders(context: &mut backend::OpenGLContext, source: ShaderSource) -> GLuint {
     let mut vert_reader = io::Cursor::new(source.vert_source);
     let mut frag_reader = io::Cursor::new(source.frag_source);
@@ -1115,8 +1210,10 @@ fn main() {
     let lighting_map = create_lighting_map();
     let mut context = init_gl(SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    //  Load the model.
+    // The model matrix for the cube light shader and the flashlight shader.
     let mesh_model_mat = Matrix4::identity();
+
+    //  Load the model data for the cube light shader..
     let mesh_shader_source = create_mesh_shader_source();
     let mesh_shader = send_to_gpu_shaders(&mut context, mesh_shader_source);
     let (
@@ -1124,9 +1221,18 @@ fn main() {
         mesh_v_pos_vbo,
         mesh_v_tex_vbo,
         mesh_v_norm_vbo) = send_to_gpu_mesh(mesh_shader, &mesh);
-    send_to_gpu_uniforms_mesh(mesh_shader, &mesh_model_mat);
+    send_to_gpu_uniforms_cube_light_mesh(mesh_shader, &mesh_model_mat);
     send_to_gpu_uniforms_camera(mesh_shader, &camera);
     send_to_gpu_uniforms_material(mesh_shader, material_uniforms);
+
+    // Load the model data for the flashlight shader.
+    let flashlight_shader_source = create_flashlight_shader_source();
+    let flashlight_shader = send_to_gpu_shaders(&mut context, flashlight_shader_source);
+    send_to_gpu_uniforms_flashlight_mesh(flashlight_shader, &mesh_model_mat);
+    send_to_gpu_uniforms_camera(flashlight_shader, &camera);
+    send_to_gpu_uniforms_material(flashlight_shader, material_uniforms);
+
+    // Load the lighting maps data for the flashlight and cubelight shaders.
     let (diffuse_tex, specular_tex) = send_to_gpu_textures_material(&lighting_map);
 
     // Load the lighting cube model.
@@ -1178,14 +1284,14 @@ fn main() {
         }
         // Render the lights.
         let light_model_mat = cube_lights[0].model_matrix() * Matrix4::from_affine_scale(0.2);
-        send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
+        send_to_gpu_uniforms_cube_light_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
             gl::BindVertexArray(light_vao);
             gl::DrawArrays(gl::TRIANGLES, 0, light_mesh.len() as i32);
         }
         let light_model_mat = cube_lights[1].model_matrix() * Matrix4::from_affine_scale(0.2);
-        send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
+        send_to_gpu_uniforms_cube_light_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
             gl::BindVertexArray(light_vao);
@@ -1193,7 +1299,7 @@ fn main() {
         }
         
         let light_model_mat = cube_lights[2].model_matrix() * Matrix4::from_affine_scale(0.2);
-        send_to_gpu_uniforms_mesh(light_shader, &light_model_mat);
+        send_to_gpu_uniforms_cube_light_mesh(light_shader, &light_model_mat);
         unsafe {
             gl::UseProgram(light_shader);
             gl::BindVertexArray(light_vao);
