@@ -66,6 +66,7 @@ use cgilluminate::{
     Light,
     LightAttitudeSpec,
     PointLightModelSpec,
+    PointLightModel,
     PointLight,
     SpotLightModelSpec,
     SpotLight,
@@ -152,7 +153,9 @@ fn create_box_positions() -> Vec<Vector3<f32>> {
     ]
 }
 
-fn create_camera(width: u32, height: u32) -> Camera<f32, PerspectiveFovProjection<f32>, FreeKinematics<f32>> {
+type PerspectiveFovCamera<S> = Camera<S, PerspectiveFovProjection<S>, FreeKinematics<S>>;
+
+fn create_camera(width: u32, height: u32) -> PerspectiveFovCamera<f32> {
     let near = 0.1;
     let far = 100.0;
     let fovy = Degrees(72.0);
@@ -184,8 +187,6 @@ fn create_camera(width: u32, height: u32) -> Camera<f32, PerspectiveFovProjectio
 
     Camera::new(&model_spec, &attitude_spec, &kinematics_spec)
 }
-
-type PerspectiveFovCamera<S> = Camera<S, PerspectiveFovProjection<S>, FreeKinematics<S>>;
 
 
 struct OrbitalKinematicsSpec<S> {
@@ -245,7 +246,7 @@ impl<S> OrbitalKinematics<S> where S: ScalarFloat {
         }
     }
 
-    fn update(&mut self, elapsed: S) -> DeltaAttitude<S> {
+    fn update(&mut self, elapsed: S) -> &Vector3<S> {
         self.radial_unit_velocity = if self.radial_unit_velocity < S::zero() {
             -S::one() 
         } else { 
@@ -275,15 +276,14 @@ impl<S> OrbitalKinematics<S> where S: ScalarFloat {
         let rot_mat = Matrix4::from(q);
         let new_position = rot_mat * (radial_vector * distance_from_scene_center).expand(S::one());
         let new_position = new_position.contract();
-        let delta_position = new_position - self.position;
+        
         self.position = new_position;
 
-        DeltaAttitude::new(
-            delta_position,
-            S::zero(), 
-            S::zero(), 
-            S::zero()
-        )
+        &self.position
+    }
+
+    fn model_matrix(&self) -> Matrix4<S> {
+        Matrix4::from_affine_translation(&self.position)
     }
 }
 
@@ -300,13 +300,24 @@ impl<S> CubeLight<S> where S: ScalarFloat {
         }
     }
 
-    fn update(&mut self, elapsed: S) {
+    #[inline]
+    fn model(&self) -> &PointLightModel<S> {
+        self.light.model()
+    }
 
+    #[inline]
+    fn position(&self) -> &Vector3<S> {
+        &self.kinematics.position
+    }
+
+    #[inline]
+    fn update(&mut self, elapsed: S) {
+        self.kinematics.update(elapsed);
     }
 
     #[inline]
     fn model_matrix(&self) -> Matrix4<S> {
-        self.light.model_matrix()
+        self.kinematics.model_matrix()
     }
 }
 
@@ -603,10 +614,10 @@ fn send_to_gpu_uniforms_cube_light(shader: GLuint, lights: &[CubeLight<f32>; 3])
     };
     debug_assert!(light_specular_loc > -1);
 
-    let model_0 = lights[0].light.model();
+    let model_0 = lights[0].model();
     unsafe {
         gl::UseProgram(shader);
-        gl::Uniform3fv(light_position_world_loc, 1, lights[0].light.position().as_ptr());
+        gl::Uniform3fv(light_position_world_loc, 1, lights[0].position().as_ptr());
         gl::Uniform3fv(light_ambient_loc, 1, model_0.ambient.as_ptr());
         gl::Uniform3fv(light_diffuse_loc, 1, model_0.diffuse.as_ptr());
         gl::Uniform3fv(light_specular_loc, 1, model_0.specular.as_ptr());
@@ -629,10 +640,10 @@ fn send_to_gpu_uniforms_cube_light(shader: GLuint, lights: &[CubeLight<f32>; 3])
     };
     debug_assert!(light_specular_loc > -1);
 
-    let model_1 = lights[1].light.model();
+    let model_1 = lights[1].model();
     unsafe {
         gl::UseProgram(shader);
-        gl::Uniform3fv(light_position_world_loc, 1, lights[1].light.position().as_ptr());
+        gl::Uniform3fv(light_position_world_loc, 1, lights[1].position().as_ptr());
         gl::Uniform3fv(light_ambient_loc, 1, model_1.ambient.as_ptr());
         gl::Uniform3fv(light_diffuse_loc, 1, model_1.diffuse.as_ptr());
         gl::Uniform3fv(light_specular_loc, 1, model_1.specular.as_ptr());
@@ -655,10 +666,10 @@ fn send_to_gpu_uniforms_cube_light(shader: GLuint, lights: &[CubeLight<f32>; 3])
     };
     debug_assert!(light_specular_loc > -1);
 
-    let model_2 = lights[2].light.model();
+    let model_2 = lights[2].model();
     unsafe {
         gl::UseProgram(shader);
-        gl::Uniform3fv(light_position_world_loc, 1, lights[2].light.position().as_ptr());
+        gl::Uniform3fv(light_position_world_loc, 1, lights[2].position().as_ptr());
         gl::Uniform3fv(light_ambient_loc, 1, model_2.ambient.as_ptr());
         gl::Uniform3fv(light_diffuse_loc, 1, model_2.diffuse.as_ptr());
         gl::Uniform3fv(light_specular_loc, 1, model_2.specular.as_ptr());
@@ -1089,7 +1100,7 @@ fn process_input(context: &mut OpenGLContext) -> CameraMovement {
 
 fn main() {
     let mesh = create_box_mesh();
-    let box_positions = create_box_positions();
+    //let box_positions = create_box_positions();
     let light_mesh = create_box_mesh();
     init_logger("opengl_demo.log");
     info!("BEGIN LOG");
