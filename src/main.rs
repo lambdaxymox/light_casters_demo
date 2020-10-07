@@ -357,7 +357,7 @@ fn create_cube_lights(scene_center_world: &Vector3<f32>) -> [CubeLight<f32>; 3] 
         axis_0
     );
     
-    let ambient_1 = Vector3::new(0.2, 0.2, 0.2);
+    let ambient_1 = Vector3::new(0.2, 0.2, 0.2);   
     let diffuse_1 = Vector3::new(0.5, 0.5, 0.5);
     let specular_1 = Vector3::new(1.0, 1.0, 1.0);
     let model_spec_1 = PointLightModelSpec::new(
@@ -1214,6 +1214,9 @@ fn main() {
     // The model matrix for the cube light shader and the flashlight shader.
     let mesh_model_mat = Matrix4::identity();
 
+    // Load the lighting maps data for the flashlight and cubelight shaders.
+    let (diffuse_tex, specular_tex) = send_to_gpu_textures_material(&lighting_map);
+
     //  Load the model data for the cube light shader..
     let mesh_shader_source = create_mesh_shader_source();
     let mesh_shader = send_to_gpu_shaders(&mut context, mesh_shader_source);
@@ -1229,12 +1232,15 @@ fn main() {
     // Load the model data for the flashlight shader.
     let flashlight_shader_source = create_flashlight_shader_source();
     let flashlight_shader = send_to_gpu_shaders(&mut context, flashlight_shader_source);
+    let (
+        flashlight_mesh_vao, 
+        flashlight_mesh_v_pos_vbo,
+        flashlight_mesh_v_tex_vbo,
+        flashlight_mesh_v_norm_vbo) = send_to_gpu_mesh(flashlight_shader, &mesh);
     send_to_gpu_uniforms_flashlight_mesh(flashlight_shader, &mesh_model_mat);
     send_to_gpu_uniforms_camera(flashlight_shader, &camera);
     send_to_gpu_uniforms_material(flashlight_shader, material_uniforms);
 
-    // Load the lighting maps data for the flashlight and cubelight shaders.
-    let (diffuse_tex, specular_tex) = send_to_gpu_textures_material(&lighting_map);
 
     // Load the lighting cube model.
     let light_shader_source = create_cube_light_shader_source();
@@ -1267,9 +1273,10 @@ fn main() {
         let delta_movement = process_input(&mut context);
         camera.update_movement(delta_movement, elapsed_seconds as f32);
         flashlight.update(&camera, elapsed_seconds as f32);
+
         send_to_gpu_uniforms_camera(mesh_shader, &camera);
-        send_to_gpu_uniforms_camera(light_shader, &camera);
         send_to_gpu_uniforms_camera(flashlight_shader, &camera);
+        send_to_gpu_uniforms_camera(light_shader, &camera);
         send_to_gpu_uniforms_cube_light(mesh_shader, &cube_lights);
         send_to_gpu_uniforms_flashlight(flashlight_shader, &flashlight);
 
@@ -1278,12 +1285,23 @@ fn main() {
             gl::ClearBufferfv(gl::COLOR, 0, &CLEAR_COLOR[0] as *const GLfloat);
             gl::ClearBufferfv(gl::DEPTH, 0, &CLEAR_DEPTH[0] as *const GLfloat);
             gl::Viewport(0, 0, context.width as GLint, context.height as GLint);
+            // Illuminate with the cube lights.
+            /*
             gl::UseProgram(mesh_shader);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D, diffuse_tex);
             gl::ActiveTexture(gl::TEXTURE1);
             gl::BindTexture(gl::TEXTURE_2D, specular_tex);
             gl::BindVertexArray(mesh_vao);
+            gl::DrawArrays(gl::TRIANGLES, 0, mesh.len() as i32);
+            */
+            // Illuminate with the flashlight.
+            gl::UseProgram(flashlight_shader);
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, diffuse_tex);
+            gl::ActiveTexture(gl::TEXTURE1);
+            gl::BindTexture(gl::TEXTURE_2D, specular_tex);
+            gl::BindVertexArray(flashlight_mesh_vao);
             gl::DrawArrays(gl::TRIANGLES, 0, mesh.len() as i32);
         }
         // Render the lights.
