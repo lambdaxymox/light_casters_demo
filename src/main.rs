@@ -763,7 +763,7 @@ fn send_to_gpu_uniforms_cube_light(shader: GLuint, lights: &[CubeLight<f32>; 3])
 /// the shader, OpenGL will optimize those uniform locations out at runtime. This
 /// will cause OpenGL to return a `GL_INVALID_VALUE` on a call to 
 /// `glGetUniformLocation`.
-fn send_to_gpu_uniforms_flashlight(shader: GLuint, light: &SpotLight<f32>) {
+fn send_to_gpu_uniforms_flashlight(shader: GLuint, light: &FlashLight<f32>) {
     let light_position_world_loc = unsafe {
         gl::GetUniformLocation(shader, backend::gl_str("light.position").as_ptr())
     };
@@ -809,7 +809,7 @@ fn send_to_gpu_uniforms_flashlight(shader: GLuint, light: &SpotLight<f32>) {
     unsafe {
         gl::UseProgram(shader);
         gl::Uniform3fv(light_position_world_loc, 1, light.position().as_ptr());
-        gl::Uniform3fv(light_direction_loc, 1, light.forward_axis().as_ptr());
+        gl::Uniform3fv(light_direction_loc, 1, light.direction().as_ptr());
         gl::Uniform1f(light_cutoff_loc, model.cutoff);
         gl::Uniform1f(light_outer_cutoff_loc, model.outer_cutoff);
         gl::Uniform3fv(light_ambient_loc, 1, model.ambient.as_ptr());
@@ -1199,6 +1199,7 @@ fn main() {
     let scene_center_world = Vector3::<f32>::zero();
     let mut camera = create_camera(SCREEN_WIDTH, SCREEN_HEIGHT);
     let mut cube_lights= create_cube_lights(&scene_center_world);
+    let mut flashlight = create_flashlight(&camera);
     let material_diffuse_index = 0;
     let material_specular_index = 1;
     let material = material::sgi_material_table()["chrome"];
@@ -1265,9 +1266,12 @@ fn main() {
         cube_lights[2].update(elapsed_seconds as f32);
         let delta_movement = process_input(&mut context);
         camera.update_movement(delta_movement, elapsed_seconds as f32);
+        flashlight.update(&camera, elapsed_seconds as f32);
         send_to_gpu_uniforms_camera(mesh_shader, &camera);
         send_to_gpu_uniforms_camera(light_shader, &camera);
+        send_to_gpu_uniforms_camera(flashlight_shader, &camera);
         send_to_gpu_uniforms_cube_light(mesh_shader, &cube_lights);
+        send_to_gpu_uniforms_flashlight(flashlight_shader, &flashlight);
 
         // Illuminate the cube.
         unsafe {
