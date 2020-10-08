@@ -70,7 +70,6 @@ use cgilluminate::{
     PointLight,
     SpotLightModelSpec,
     SpotLight,
-    DeltaAttitude,
     SpotLightModel,
 };
 
