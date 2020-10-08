@@ -154,6 +154,22 @@ fn create_box_positions() -> Vec<Vector3<f32>> {
     ]
 }
 
+fn create_box_model_matrices(box_positions: &[Vector3<f32>]) -> Vec<Matrix4<f32>> {
+    let mut box_model_matrices = vec![];
+    for i in 0..box_positions.len() {
+        let translation_i = Matrix4::from_affine_translation(&box_positions[i]);
+        let angle_i = Radians(20.0 * (i as f32));
+        let axis_i = Unit::from_value(Vector3::new(1.0, 0.3, 0.5));
+        let rotation_i = Matrix4::from_affine_axis_angle(&axis_i, angle_i);
+        let model_i = rotation_i * translation_i;
+        box_model_matrices.push(model_i);
+    }
+
+    debug_assert_eq!(box_model_matrices.len(), box_positions.len());
+
+    box_model_matrices
+}
+
 type PerspectiveFovCamera<S> = Camera<S, PerspectiveFovProjection<S>, FreeKinematics<S>>;
 
 fn create_camera(width: u32, height: u32) -> PerspectiveFovCamera<f32> {
@@ -1192,7 +1208,8 @@ fn process_input(context: &mut OpenGLContext) -> CameraMovement {
 
 fn main() {
     let mesh = create_box_mesh();
-    //let box_positions = create_box_positions();
+    let box_positions = create_box_positions();
+    let box_model_matrices = create_box_model_matrices(&box_positions);
     let light_mesh = create_box_mesh();
     init_logger("opengl_demo.log");
     info!("BEGIN LOG");
@@ -1280,12 +1297,12 @@ fn main() {
         send_to_gpu_uniforms_cube_light(mesh_shader, &cube_lights);
         send_to_gpu_uniforms_flashlight(flashlight_shader, &flashlight);
 
-        // Illuminate the cube.
+        
         unsafe {
             gl::ClearBufferfv(gl::COLOR, 0, &CLEAR_COLOR[0] as *const GLfloat);
             gl::ClearBufferfv(gl::DEPTH, 0, &CLEAR_DEPTH[0] as *const GLfloat);
             gl::Viewport(0, 0, context.width as GLint, context.height as GLint);
-            // Illuminate with the cube lights.
+            // Illuminate the boxes with the cube lights.
             /*
             gl::UseProgram(mesh_shader);
             gl::ActiveTexture(gl::TEXTURE0);
@@ -1295,7 +1312,8 @@ fn main() {
             gl::BindVertexArray(mesh_vao);
             gl::DrawArrays(gl::TRIANGLES, 0, mesh.len() as i32);
             */
-            // Illuminate with the flashlight.
+            
+            // Illuminate the boxes with the flashlight.
             gl::UseProgram(flashlight_shader);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D, diffuse_tex);
@@ -1303,8 +1321,19 @@ fn main() {
             gl::BindTexture(gl::TEXTURE_2D, specular_tex);
             gl::BindVertexArray(flashlight_mesh_vao);
             gl::DrawArrays(gl::TRIANGLES, 0, mesh.len() as i32);
+            
         }
-        // Render the lights.
+
+        // Illuminate the boxes.
+        for model_matrix in box_model_matrices.iter() {
+            unsafe {
+                send_to_gpu_uniforms_flashlight_mesh(flashlight_shader, &model_matrix);
+                //send_to_gpu_uniforms_cube_light_mesh(mesh_shader, &model_matrix);
+                gl::DrawArrays(gl::TRIANGLES, 0, mesh.len() as i32);
+            }
+        }
+
+        // Render the cube lights.
         let light_model_mat = cube_lights[0].model_matrix() * Matrix4::from_affine_scale(0.2);
         send_to_gpu_uniforms_cube_light_mesh(light_shader, &light_model_mat);
         unsafe {
