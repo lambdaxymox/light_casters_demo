@@ -103,7 +103,7 @@ impl<S> OrbitalKinematics<S> where S: ScalarFloat {
             &orbital_axis, Radians(self.orbital_speed * elapsed)
         );
         let rot_mat = Matrix4::from(q);
-        let new_position = rot_mat * (radial_vector * distance_from_scene_center).expand(S::one());
+        let new_position = rot_mat * (radial_vector * distance_from_scene_center).extend(S::one());
         let new_position = new_position.contract();
         
         self.position = new_position;
